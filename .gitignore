@@ -1,0 +1,19 @@
+*.class
+
+*.log
+# Package Files #
+*.jar
+*.war
+*.ear
+target/
+/.classpath
+/.project
+.settings/
+outputDir
+bin
+.tomcatplugin
+WebContent
+files/hs/
+project
+src/main/scala/hs
+.cache-main

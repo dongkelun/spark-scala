@@ -1,0 +1,11 @@
+hadoop hive
+solr redis
+kafka hadoop
+storm flume
+sqoop docker
+spark spark
+hadoop spark
+elasticsearch hbase
+hadoop hive
+spark hive
+hadoop spark

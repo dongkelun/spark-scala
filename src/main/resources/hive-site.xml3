@@ -1,0 +1,6 @@
+  <configuration>
+    <property>
+      <name>hive.metastore.uris</name>
+      <value>thrift://192.168.44.128:9083</value>
+    </property>
+  </configuration>
