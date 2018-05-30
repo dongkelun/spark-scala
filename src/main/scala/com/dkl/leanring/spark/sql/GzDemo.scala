@@ -17,10 +17,10 @@ object GzDemo {
     val path1 = "D:/我的文档/sdhs/数据统计20180416/数据统计20180416.txt"
     val path2 = "D:/我的文档/sdhs/数据统计20180416.rar"
     val path3 = "hdfs://ambari.master.com:8020/tmp/dkl/data.tar.gz"
-    val path4 = "hdfs://ambari.master.com:8020/tmp/dkl/t1.txt"
+    val path4 = "hdfs://ambari.master.com:8020/tmp/dkl/t1.tar.gz"
     val path5 = "hdfs://ambari.master.com:8020/tmp/dkl/数据统计20180416.tar.gz"
     val starttime = System.nanoTime
-    val rdd = sc.textFile(path3)
+    val rdd = sc.textFile(path4)
     //    println(rdd.count())
     rdd.take(6).foreach(println)
     transfer(sc, path5).take(6).foreach(println)
