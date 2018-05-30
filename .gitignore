@@ -15,5 +15,5 @@ bin
 WebContent
 files/hs/
 project
-src/main/scala/hs
+src/main/scala/com/hs/
 .cache-main
