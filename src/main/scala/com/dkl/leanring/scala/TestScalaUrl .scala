@@ -5,9 +5,154 @@ import scala.util.parsing.json.JSON
 import scala.xml.XML
 import java.io.PrintWriter
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.Row
 
 object TestScalaUrl {
+
+  //定义判断是否在服务区的标准距离，单位：米
+  val standardDistance = 10000
+
+  val serviceAreas = Array("117.058308,36.73142", "116.858263,36.73142", "117.051097,36.73142", "117.077884,36.73142",
+    "117.42785,36.73142", "119.908728,36.73142", "119.891278,36.946536")
+
+  val database_url = "jdbc:mysql://10.180.29.181:3306/route_analysis?useUnicode=true&characterEncoding=utf-8"
+  val user = "route"
+  val password = "Route-123"
   def main(args: Array[String]) {
+    val spark = SparkSession.builder().appName("JdbcDemo").master("local").enableHiveSupport().getOrCreate()
+    val table_route = """
+      (select
+      		A.id,
+      		A.en_raw_name,
+      		A.ex_raw_name,
+      		A.province_code,
+      		A.station_name as en_station_name,
+      		B.station_name as ex_station_name
+      from
+      (
+      select
+      		route_freq.id,
+      		route_freq.en_raw_name,
+      		route_freq.ex_raw_name,
+      		route_freq.province_code,
+      		toll_station.station_name
+      from
+      		route_freq,toll_station
+      where
+      		route_freq.en_raw_name=toll_station.raw_name
+      and
+      		route_freq.province_code = toll_station.province_code
+      )A,
+      (
+      select
+      		route_freq.id,
+      		route_freq.en_raw_name,
+      		route_freq.ex_raw_name,
+      		route_freq.province_code,
+      		toll_station.station_name
+      from
+      		route_freq,toll_station
+      where
+      		route_freq.ex_raw_name=toll_station.raw_name
+      and
+      		route_freq.province_code = toll_station.province_code
+      )B
+      where A.id= B.id
+      )route
+      """
+    val df_route = spark.read
+      .format("jdbc")
+      .option("url", database_url)
+      .option("dbtable", table_route)
+      .option("user", user)
+      .option("password", "Route-123")
+      .load()
+    df_route.show()
+
+    val df_gaode = spark.read
+      .format("jdbc")
+      .option("url", database_url)
+      .option("dbtable", "gaode_station")
+      .option("user", user)
+      .option("password", "Route-123")
+      .load()
+
+    //    df_gaode.show()
+
+    df_route.createOrReplaceTempView("route")
+    df_gaode.createOrReplaceTempView("gaode")
+
+    import spark.sql
+
+    val sql_str1 = """
+    select
+           A.id,
+           A.lng as lng1,
+           A.lat as lat1,
+           B.lng as lng2,
+           B.lat as lat2,
+           stationId1,
+           stationId2
+    from
+    (select
+            route.id,
+            gaode.id as stationId1,
+            lng,
+            lat
+      from
+            route,gaode
+      where
+            en_station_name = station
+      and
+            route.province_code=gaode.province
+    )A,
+    (select
+            route.id,
+            gaode.id as stationId2,
+            lng,
+            lat
+      from
+            route,gaode
+      where
+            ex_station_name = station
+      and
+            route.province_code=gaode.province
+    )B
+    where A.id = B.id
+    """
+    val df_res = sql(sql_str1)
+
+    sql("use route_analysis")
+    import spark.implicits._
+    val polylinesDf = df_res.rdd.map(row => {
+      val lng1 = row.getAs[Double]("lng1")
+      val lat1 = row.getAs[Double]("lat1")
+      val lng2 = row.getAs[Double]("lng2")
+      val lat2 = row.getAs[Double]("lat2")
+      val url = s"http://restapi.amap.com/v3/direction/driving?origin=${lng1},${lat1}&destination=${lng2},${lat2}&extensions=all&output=xml&key=1c9ebb6d1d1fca0f3aa97e58f1515a45&strategy=19"
+      println(url)
+      //链接url，获取返回值
+      val fileContent = Source.fromURL(url, "utf-8").mkString
+      //写入本地磁盘
+      //    println(fileContent)
+      val pw = new PrintWriter("D:/map.xml")
+      pw.write(fileContent)
+      pw.flush
+      pw.close
+      val xmlPath = "D:/map.xml"
+
+      //获取每个路线上的经纬度
+      val polylines = getPolyline(xmlPath)(0).mkString(";")
+
+      val stationId1 = row.getAs[String]("stationId1")
+      val stationId2 = row.getAs[String]("stationId2")
+      (stationId1 + "_" + stationId2, polylines, stationId1, stationId2, "")
+    }).toDF("lineId", "points", "stationId1", "stationId2", "serviceIds")
+    polylinesDf.show()
+    polylinesDf.write.mode("append").saveAsTable("route_line")
+    spark.stop()
+
+    return
     //获取抽样参数的url
     //    val url = "http://restapi.amap.com/v3/direction/driving?origin=116.9905,36.67085&destination=120.312643,36.67085&extensions=all&output=xml&key=1c9ebb6d1d1fca0f3aa97e58f1515a45&strategy=19"
     //    //链接url，获取返回值
@@ -19,10 +164,45 @@ object TestScalaUrl {
     //    pw.flush
     //    pw.close
     //    testArray
+
     val xmlPath = "D:/map.xml"
+
+    //获取每个路线上的经纬度
     val polylines = getPolyline(xmlPath)
 
     polylines.foreach(polyline => getPolylineDistance(polyline))
+
+    val serviceAreasOnPolyline = Array.fill(polylines.length)("")
+    serviceAreas.foreach(serviceArea => {
+      var mapDistance: Map[String, Double] = Map()
+      var index = 0
+      polylines.foreach(polyline => {
+
+        val distanceArr = new Array[Double](polylines.length)
+        for (i <- 0 until distanceArr.length) {
+          val before = serviceArea.split(",")
+          val after = polyline(i).split(",")
+          distanceArr(i) = getDistance(before(0).toDouble, before(1).toDouble, after(0).toDouble, after(1).toDouble)
+          mapDistance += (serviceArea + " " + polyline(i) -> getDistance(before(0).toDouble, before(1).toDouble, after(0).toDouble, after(1).toDouble))
+        }
+        import scala.collection.immutable.ListMap
+
+        //降序排序
+        val mapDistanceSort = sortMapByValue(mapDistance, false)
+
+        println("降序排序打印服务区和每个路段的距离")
+        println(index)
+        mapDistanceSort.take(3).foreach(println)
+        val arr = mapDistanceSort.toArray
+        if (arr(0)._2 < standardDistance) {
+          serviceAreasOnPolyline(index) += serviceArea + ";"
+        }
+        index += 1
+      })
+
+    })
+    serviceAreasOnPolyline.foreach(println)
+
     println("==========================================")
     val xml = XML.load("D:/map.xml")
     val polyline = xml \\ "polyline"
@@ -39,7 +219,7 @@ object TestScalaUrl {
    * 获取每个路线上的经纬度
    */
   def getPolyline(xmlPath: String) = {
-    val spark = SparkSession.builder().appName("xml").master("local").getOrCreate()
+    //    val spark = SparkSession.builder().appName("xml").master("local").getOrCreate()
     val xml = XML.load(xmlPath)
     val paths = xml \\ "path" //一般会有三条路线
 
@@ -58,21 +238,21 @@ object TestScalaUrl {
     println("打印每种路线的经纬组成的字符串")
     polylines.foreach(polyline => println(polyline.mkString(";")))
 
-    //polylines转为rdd，便于后面的算子操作
-    val polylinesRdd = spark.sparkContext.parallelize(polylines, 10)
-
-    //每个经纬出现的次数，然后降序排序，比如有三条路线，则根据出现三次的经纬数所占的比例可以看出，三种路线重叠的路段占整个路段的比例
-    val polylinesCountSort = polylinesRdd.flatMap(kv => kv).map((_, 1)).reduceByKey(_ + _).map(kv => (kv._2, kv._1)).sortByKey(false)
-
-    //有多少条路线
-    val len = paths.length
-
-    //每个路线都存在的经纬
-    val count = polylinesCountSort.filter(_._1 == len).count()
-    println("每个路线都存在的路段数所占比例")
-    polylines.foreach(polyline => println(count * 1.0 / polyline.length))
-
-    spark.stop()
+    //    //polylines转为rdd，便于后面的算子操作
+    //    val polylinesRdd = spark.sparkContext.parallelize(polylines, 10)
+    //
+    //    //每个经纬出现的次数，然后降序排序，比如有三条路线，则根据出现三次的经纬数所占的比例可以看出，三种路线重叠的路段占整个路段的比例
+    //    val polylinesCountSort = polylinesRdd.flatMap(kv => kv).map((_, 1)).reduceByKey(_ + _).map(kv => (kv._2, kv._1)).sortByKey(false)
+    //
+    //    //有多少条路线
+    //    val len = paths.length
+    //
+    //    //每个路线都存在的经纬
+    //    val count = polylinesCountSort.filter(_._1 == len).count()
+    //    println("每个路线都存在的路段数所占比例")
+    //    polylines.foreach(polyline => println(count * 1.0 / polyline.length))
+    //
+    //    spark.stop()
     polylines
   }
 
@@ -97,7 +277,6 @@ object TestScalaUrl {
 
     println("降序排序打印相邻经纬和距离")
     mapDistanceSort.take(5).foreach(println)
-
     println("降序排序打印相邻距离")
     distance.sortWith(_ > _).take(5).foreach(println)
 
@@ -120,7 +299,28 @@ object TestScalaUrl {
     s
 
   }
+  def rad(d: Double) = {
 
+    d * Math.PI / 180.00; //角度转换成弧度
+
+  }
+
+  /**
+   * 根据map的value值进行排序,ascending是否升序，默认为true，如果为false，则降序排序
+   */
+  def sortMapByValue(mapDistance: Map[String, Double], ascending: Boolean = true) = {
+    import scala.collection.immutable.ListMap
+
+    if (ascending) {
+      //升序
+      ListMap(mapDistance.toSeq.sortWith(_._2 > _._2): _*)
+
+    } else {
+      //降序
+      ListMap(mapDistance.toSeq.sortWith(_._2 < _._2): _*)
+    }
+
+  }
   def testArray() {
 
     val arr1 = new Array[Int](8)
@@ -132,9 +332,4 @@ object TestScalaUrl {
 
   }
 
-  def rad(d: Double) = {
-
-    d * Math.PI / 180.00; //角度转换成弧度
-
-  }
 }
