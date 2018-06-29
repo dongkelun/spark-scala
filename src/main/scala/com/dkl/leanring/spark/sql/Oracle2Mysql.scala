@@ -7,7 +7,16 @@ object Oracle2Mysql {
     val spark = SparkSession.builder().appName("JdbcDemo").master("local").getOrCreate()
     val data = Array(("1", "2", "3", "4", "5"), ("6", "7", "8", "9", "10"))
     val df = spark.createDataFrame(data).toDF("col1", "col2", "col3", "col4", "col5")
+
     df.show
+    import org.apache.spark.sql.functions._
+    def f(i: String) = {
+      "newCol"
+    }
+
+    val udf1 = udf(f _)
+    df.drop("col3").withColumn("col3", udf1(df("col2"))).show
+    df.selectExpr("col1", "col2", "'newCol' as col3", "col4", "col5").show()
     val df1 = df.drop("col3")
     df1.show
     df.createOrReplaceTempView("table")

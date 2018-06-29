@@ -1,4 +1,4 @@
-package com.dkl.leanring.scala
+package com.dkl.leanring.scala.url
 
 import scala.io.Source
 import scala.util.parsing.json.JSON
@@ -6,8 +6,7 @@ import scala.xml.XML
 import java.io.PrintWriter
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.Row
-
-object TestScalaUrl {
+object ParseRoute {
 
   //定义判断是否在服务区的标准距离，单位：米
   val standardDistance = 10000
@@ -19,51 +18,12 @@ object TestScalaUrl {
   val user = "route"
   val password = "Route-123"
   def main(args: Array[String]) {
-    val spark = SparkSession.builder().appName("JdbcDemo").master("local").enableHiveSupport().getOrCreate()
-    val table_route = """
-      (select
-      		A.id,
-      		A.en_raw_name,
-      		A.ex_raw_name,
-      		A.province_code,
-      		A.station_name as en_station_name,
-      		B.station_name as ex_station_name
-      from
-      (
-      select
-      		route_freq.id,
-      		route_freq.en_raw_name,
-      		route_freq.ex_raw_name,
-      		route_freq.province_code,
-      		toll_station.station_name
-      from
-      		route_freq,toll_station
-      where
-      		route_freq.en_raw_name=toll_station.raw_name
-      and
-      		route_freq.province_code = toll_station.province_code
-      )A,
-      (
-      select
-      		route_freq.id,
-      		route_freq.en_raw_name,
-      		route_freq.ex_raw_name,
-      		route_freq.province_code,
-      		toll_station.station_name
-      from
-      		route_freq,toll_station
-      where
-      		route_freq.ex_raw_name=toll_station.raw_name
-      and
-      		route_freq.province_code = toll_station.province_code
-      )B
-      where A.id= B.id
-      )route
-      """
+    val spark = SparkSession.builder().appName("ParseRoute").master("local").enableHiveSupport().getOrCreate()
+
     val df_route = spark.read
       .format("jdbc")
       .option("url", database_url)
-      .option("dbtable", table_route)
+      .option("dbtable", RoutesSql.table_route)
       .option("user", user)
       .option("password", "Route-123")
       .load()
@@ -79,52 +39,17 @@ object TestScalaUrl {
 
     //    df_gaode.show()
 
+    //创建临时表，便于后面用sql进行查询
     df_route.createOrReplaceTempView("route")
     df_gaode.createOrReplaceTempView("gaode")
 
     import spark.sql
 
-    val sql_str1 = """
-    select
-           A.id,
-           A.lng as lng1,
-           A.lat as lat1,
-           B.lng as lng2,
-           B.lat as lat2,
-           stationId1,
-           stationId2
-    from
-    (select
-            route.id,
-            gaode.id as stationId1,
-            lng,
-            lat
-      from
-            route,gaode
-      where
-            en_station_name = station
-      and
-            route.province_code=gaode.province
-    )A,
-    (select
-            route.id,
-            gaode.id as stationId2,
-            lng,
-            lat
-      from
-            route,gaode
-      where
-            ex_station_name = station
-      and
-            route.province_code=gaode.province
-    )B
-    where A.id = B.id
-    """
-    val df_res = sql(sql_str1)
+    val df_res = sql(RoutesSql.longitudeAndLatitudes)
 
     sql("use route_analysis")
     import spark.implicits._
-    val polylinesDf = df_res.rdd.map(row => {
+    val stepDf = df_res.rdd.map(row => {
       val lng1 = row.getAs[Double]("lng1")
       val lat1 = row.getAs[Double]("lat1")
       val lng2 = row.getAs[Double]("lng2")
@@ -142,79 +67,146 @@ object TestScalaUrl {
       val xmlPath = "D:/map.xml"
 
       //获取每个路线上的经纬度
-      val polylines = getPolyline(xmlPath)(0).mkString(";")
+      val stepInfo = getPolylineByStep(xmlPath)
+      //      println("--------------------------", stepInfo.length)
+      stepInfo
+    }).flatMap(seq => {
+      seq.map(step => step)
 
-      val stationId1 = row.getAs[String]("stationId1")
-      val stationId2 = row.getAs[String]("stationId2")
-      (stationId1 + "_" + stationId2, polylines, stationId1, stationId2, "")
-    }).toDF("lineId", "points", "stationId1", "stationId2", "serviceIds")
+    }).toDF("stepId", "instruction", "orientation", "road", "distance", "tolls", "toll_distance", "polyline")
+
+    //    println(stepDf.count)
+    //    println(stepDf.distinct().count())
+
+    stepDf.distinct().createOrReplaceTempView("stepDf")
+
+    //将hive里的表取出来放在缓存，这样比较去重会快一点，但是要注意内存大小是否足够
+    sql("select * from route_step").createOrReplaceTempView("temp_route_step")
+
+    //将stepDf里的且hive表里没有的写到hive表里（去重）
+    sql("select * from stepDf where stepId not in (select stepId from temp_route_step)").write.mode("append").saveAsTable("route_step")
+    //    stepDf.distinct()
+    val polylinesDf = df_res.rdd.map(getRouteLine).toDF("lineId", "points", "stationId1", "stationId2", "serviceIds")
     //    polylinesDf.show()
+    //写到route_line表
     polylinesDf.write.mode("append").saveAsTable("route_line")
     spark.stop()
 
-    return
-    //获取抽样参数的url
-    //    val url = "http://restapi.amap.com/v3/direction/driving?origin=116.9905,36.67085&destination=120.312643,36.67085&extensions=all&output=xml&key=1c9ebb6d1d1fca0f3aa97e58f1515a45&strategy=19"
-    //    //链接url，获取返回值
-    //    val fileContent = Source.fromURL(url, "utf-8").mkString
-    //    //写入本地磁盘
-    //    //    println(fileContent)
-    //    val pw = new PrintWriter("D:/map.xml")
-    //    pw.write(fileContent)
-    //    pw.flush
-    //    pw.close
-    //    testArray
+  }
 
+  /**
+   *
+   */
+  def getRouteLine(row: Row) = {
+    val lng1 = row.getAs[Double]("lng1")
+    val lat1 = row.getAs[Double]("lat1")
+    val lng2 = row.getAs[Double]("lng2")
+    val lat2 = row.getAs[Double]("lat2")
+    val url = s"http://restapi.amap.com/v3/direction/driving?origin=${lng1},${lat1}&destination=${lng2},${lat2}&extensions=all&output=xml&key=1c9ebb6d1d1fca0f3aa97e58f1515a45&strategy=19"
+    println(url)
+    //链接url，获取返回值
+    val fileContent = Source.fromURL(url, "utf-8").mkString
+    //写入本地磁盘
+    //    println(fileContent)
+    val pw = new PrintWriter("D:/map.xml")
+    pw.write(fileContent)
+    pw.flush
+    pw.close
     val xmlPath = "D:/map.xml"
 
     //获取每个路线上的经纬度
-    val polylines = getPolyline(xmlPath)
+    val polylines = getPolylineStepId(xmlPath).mkString(";")
 
-    polylines.foreach(polyline => getPolylineDistance(polyline))
-
-    val serviceAreasOnPolyline = Array.fill(polylines.length)("")
-    serviceAreas.foreach(serviceArea => {
-      var mapDistance: Map[String, Double] = Map()
-      var index = 0
-      polylines.foreach(polyline => {
-
-        val distanceArr = new Array[Double](polylines.length)
-        for (i <- 0 until distanceArr.length) {
-          val before = serviceArea.split(",")
-          val after = polyline(i).split(",")
-          distanceArr(i) = getDistance(before(0).toDouble, before(1).toDouble, after(0).toDouble, after(1).toDouble)
-          mapDistance += (serviceArea + " " + polyline(i) -> getDistance(before(0).toDouble, before(1).toDouble, after(0).toDouble, after(1).toDouble))
-        }
-        import scala.collection.immutable.ListMap
-
-        //降序排序
-        val mapDistanceSort = sortMapByValue(mapDistance, false)
-
-        println("降序排序打印服务区和每个路段的距离")
-        println(index)
-        mapDistanceSort.take(3).foreach(println)
-        val arr = mapDistanceSort.toArray
-        if (arr(0)._2 < standardDistance) {
-          serviceAreasOnPolyline(index) += serviceArea + ";"
-        }
-        index += 1
-      })
-
-    })
-    serviceAreasOnPolyline.foreach(println)
-
-    println("==========================================")
-    val xml = XML.load("D:/map.xml")
-    val polyline = xml \\ "polyline"
-    val arr = polyline.map(one => one.text).flatMap(_.split(";")).distinct
-    getPolylineDistance(arr)
-    var count = 0
-    polylines.foreach(count += _.length)
-
-    println(count, arr.length - 1)
-
+    val stationId1 = row.getAs[String]("stationId1")
+    val stationId2 = row.getAs[String]("stationId2")
+    (stationId1 + "_" + stationId2, polylines, stationId1, stationId2, "")
   }
 
+  def getPolylineStepId(xmlPath: String) = {
+    //    val spark = SparkSession.builder().appName("xml").master("local").getOrCreate()
+    val xml = XML.load(xmlPath)
+    val paths = xml \\ "path" //一般会有三条路线
+    val path = paths(0) // 取第一条路径（距离最短）
+    val steps = path \\ "step"
+
+    val stepInfo = steps.map(step => {
+      val polyline = step \ "polyline"
+
+      val polylineArr = polyline.text.split(";")
+
+      val instruction = step \ "instruction"
+      val orientation = step \ "orientation"
+      val road = step \ "road"
+      val distance = step \ "distance"
+      val tolls = step \ "tolls"
+      val toll_distance = step \ "toll_distance"
+
+      //      println(instruction.text)
+      //      println(polylineArr(0) + "_" + polylineArr.last)
+      //      println(polyline.text)
+      polylineArr(0) + "_" + polylineArr.last
+    })
+
+    stepInfo
+  }
+
+  def getPolylineByStep(xmlPath: String) = {
+    //    val spark = SparkSession.builder().appName("xml").master("local").getOrCreate()
+    val xml = XML.load(xmlPath)
+    val paths = xml \\ "path" //一般会有三条路线
+    val path = paths(0) // 取第一条路径（距离最短）
+    val steps = path \\ "step"
+
+    val stepInfo = steps.map(step => {
+      val polyline = step \ "polyline"
+
+      val polylineArr = polyline.text.split(";")
+
+      val instruction = step \ "instruction"
+      val orientation = step \ "orientation"
+      val road = step \ "road"
+      val distance = step \ "distance"
+      val tolls = step \ "tolls"
+      val toll_distance = step \ "toll_distance"
+
+      //      println(instruction.text)
+      //      println(polylineArr(0) + "_" + polylineArr.last)
+      //      println(polyline.text)
+      (polylineArr(0) + "_" + polylineArr.last, instruction.text, orientation.text, road.text, distance.text, tolls.text, toll_distance.text, polyline.text)
+    })
+
+    //多个经纬度组成的路线
+    //    val polylines = paths.map(path => {
+    //
+    //      //解析每个step的第一级polyline，不解析下一级，因为和第一级是重复的
+    //      val polyline = (path \\ "step" \ "polyline")
+    //
+    //      //以；切分为多个经纬度组成的路线，然后去重，因为上一个路线的最后一个经纬度会和下一个路线经纬度相同
+    //      val longitudeAndLatitudes = polyline.map(one => one.text).flatMap(_.split(";")).distinct
+    //      longitudeAndLatitudes
+    //    })
+    //打印每种路线的经纬组成的字符串
+    //由于每个路线组成的字符串长度太大，所以在IDE里打印出来显示有问题，这里只做代码示例，实际可以保存到数据库里
+    //    println("打印每种路线的经纬组成的字符串")
+    //    polylines.foreach(polyline => println(polyline.mkString(";")))
+
+    //    //polylines转为rdd，便于后面的算子操作
+    //    val polylinesRdd = spark.sparkContext.parallelize(polylines, 10)
+    //
+    //    //每个经纬出现的次数，然后降序排序，比如有三条路线，则根据出现三次的经纬数所占的比例可以看出，三种路线重叠的路段占整个路段的比例
+    //    val polylinesCountSort = polylinesRdd.flatMap(kv => kv).map((_, 1)).reduceByKey(_ + _).map(kv => (kv._2, kv._1)).sortByKey(false)
+    //
+    //    //有多少条路线
+    //    val len = paths.length
+    //
+    //    //每个路线都存在的经纬
+    //    val count = polylinesCountSort.filter(_._1 == len).count()
+    //    println("每个路线都存在的路段数所占比例")
+    //    polylines.foreach(polyline => println(count * 1.0 / polyline.length))
+    //
+    //    spark.stop()
+    stepInfo
+  }
   /**
    * 获取每个路线上的经纬度
    */
@@ -235,8 +227,8 @@ object TestScalaUrl {
     })
     //打印每种路线的经纬组成的字符串
     //由于每个路线组成的字符串长度太大，所以在IDE里打印出来显示有问题，这里只做代码示例，实际可以保存到数据库里
-    println("打印每种路线的经纬组成的字符串")
-    polylines.foreach(polyline => println(polyline.mkString(";")))
+    //    println("打印每种路线的经纬组成的字符串")
+    //    polylines.foreach(polyline => println(polyline.mkString(";")))
 
     //    //polylines转为rdd，便于后面的算子操作
     //    val polylinesRdd = spark.sparkContext.parallelize(polylines, 10)
