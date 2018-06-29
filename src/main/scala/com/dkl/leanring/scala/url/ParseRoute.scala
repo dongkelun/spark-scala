@@ -8,12 +8,6 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.Row
 object ParseRoute {
 
-  //定义判断是否在服务区的标准距离，单位：米
-  val standardDistance = 10000
-
-  val serviceAreas = Array("117.058308,36.73142", "116.858263,36.73142", "117.051097,36.73142", "117.077884,36.73142",
-    "117.42785,36.73142", "119.908728,36.73142", "119.891278,36.946536")
-
   val database_url = "jdbc:mysql://10.180.29.181:3306/route_analysis?useUnicode=true&characterEncoding=utf-8"
   val user = "route"
   val password = "Route-123"
@@ -45,38 +39,13 @@ object ParseRoute {
 
     import spark.sql
 
-    val df_res = sql(RoutesSql.longitudeAndLatitudes)
+    val df_longitudeAndLatitudes = sql(RoutesSql.longitudeAndLatitudes).cache()
 
     sql("use route_analysis")
     import spark.implicits._
-    val stepDf = df_res.rdd.map(row => {
-      val lng1 = row.getAs[Double]("lng1")
-      val lat1 = row.getAs[Double]("lat1")
-      val lng2 = row.getAs[Double]("lng2")
-      val lat2 = row.getAs[Double]("lat2")
-      val url = s"http://restapi.amap.com/v3/direction/driving?origin=${lng1},${lat1}&destination=${lng2},${lat2}&extensions=all&output=xml&key=1c9ebb6d1d1fca0f3aa97e58f1515a45&strategy=19"
-      println(url)
-      //链接url，获取返回值
-      val fileContent = Source.fromURL(url, "utf-8").mkString
-      //写入本地磁盘
-      //    println(fileContent)
-      val pw = new PrintWriter("D:/map.xml")
-      pw.write(fileContent)
-      pw.flush
-      pw.close
-      val xmlPath = "D:/map.xml"
-
-      //获取每个路线上的经纬度
-      val stepInfo = getPolylineByStep(xmlPath)
-      //      println("--------------------------", stepInfo.length)
-      stepInfo
-    }).flatMap(seq => {
+    val stepDf = df_longitudeAndLatitudes.rdd.map(getRouteStep).flatMap(seq => {
       seq.map(step => step)
-
     }).toDF("stepId", "instruction", "orientation", "road", "distance", "tolls", "toll_distance", "polyline")
-
-    //    println(stepDf.count)
-    //    println(stepDf.distinct().count())
 
     stepDf.distinct().createOrReplaceTempView("stepDf")
 
@@ -84,18 +53,89 @@ object ParseRoute {
     sql("select * from route_step").createOrReplaceTempView("temp_route_step")
 
     //将stepDf里的且hive表里没有的写到hive表里（去重）
-    sql("select * from stepDf where stepId not in (select stepId from temp_route_step)").write.mode("append").saveAsTable("route_step")
-    //    stepDf.distinct()
-    val polylinesDf = df_res.rdd.map(getRouteLine).toDF("lineId", "points", "stationId1", "stationId2", "serviceIds")
+    //    sql("select * from stepDf where stepId not in (select stepId from temp_route_step)").write.mode("append").saveAsTable("route_step")
+
+    val polylinesDf = df_longitudeAndLatitudes.rdd.map(getRouteLine).toDF("lineId", "points", "stationId1", "stationId2", "serviceIds")
     //    polylinesDf.show()
+
     //写到route_line表
-    polylinesDf.write.mode("append").saveAsTable("route_line")
+    //    polylinesDf.write.mode("append").saveAsTable("route_line")
+
+    import java.sql.{ Connection, DriverManager, ResultSet };
+    val conn_str = database_url + "&user=" + user + "&password=" + password
+    //    val conn = DriverManager.getConnection(conn_str)
+    //    try {
+    //      // Configure to be Read Only
+    //      val statement = conn.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+    //      // Execute Query
+    //      //      val rs = statement.executeQuery("SELECT * FROM route_freq LIMIT 5")
+    //      //      // Iterate Over ResultSet
+    //      //      while (rs.next) {
+    //      //        println(rs.getString("en_raw_name"))
+    //      //      }
+    //      val prep = conn.prepareStatement("update route_freq set stored=1 , stored_time=cast(CURRENT_TIMESTAMP as char) where id=?")
+    //
+    //      df_route.select("id").collect().foreach(row => {
+    //        val id = row.getAs[Int]("id")
+    //        prep.setInt(1, id)
+    //        prep.executeUpdate
+    //
+    //      })
+    //
+    //    } catch {
+    //      case e: Exception => e.printStackTrace
+    //    } finally {
+    //      conn.close
+    //    }
+
+    try {
+      // Configure to be Read Only
+
+      df_route.foreach(row => {
+        val conn = DriverManager.getConnection(conn_str)
+        val statement = conn.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+        val prep = conn.prepareStatement("update route_freq set stored=1 , stored_time=cast(CURRENT_TIMESTAMP as char) where id=?")
+
+        val id = row.getAs[Int]("id")
+        prep.setInt(1, id)
+        prep.executeUpdate
+        conn.close()
+
+      })
+
+    } catch {
+      case e: Exception => e.printStackTrace
+    }
+
     spark.stop()
 
   }
-
   /**
-   *
+   * 返回route_step表需要的表结构数据
+   */
+  def getRouteStep(row: Row) = {
+    val lng1 = row.getAs[Double]("lng1")
+    val lat1 = row.getAs[Double]("lat1")
+    val lng2 = row.getAs[Double]("lng2")
+    val lat2 = row.getAs[Double]("lat2")
+    val url = s"http://restapi.amap.com/v3/direction/driving?origin=${lng1},${lat1}&destination=${lng2},${lat2}&extensions=all&output=xml&key=1c9ebb6d1d1fca0f3aa97e58f1515a45&strategy=19"
+    println(url)
+    //链接url，获取返回值
+    val fileContent = Source.fromURL(url, "utf-8").mkString
+    //写入本地磁盘
+    //    println(fileContent)
+    val pw = new PrintWriter("/map.xml")
+    pw.write(fileContent)
+    pw.flush
+    pw.close
+    val xmlPath = "/map.xml"
+
+    //获取每个路线上的经纬度
+    val stepInfo = getPolylineByStep(xmlPath)
+    stepInfo
+  }
+  /**
+   * 返回route_line表需要的表结构数据
    */
   def getRouteLine(row: Row) = {
     val lng1 = row.getAs[Double]("lng1")
@@ -108,11 +148,11 @@ object ParseRoute {
     val fileContent = Source.fromURL(url, "utf-8").mkString
     //写入本地磁盘
     //    println(fileContent)
-    val pw = new PrintWriter("D:/map.xml")
+    val pw = new PrintWriter("/map.xml")
     pw.write(fileContent)
     pw.flush
     pw.close
-    val xmlPath = "D:/map.xml"
+    val xmlPath = "/map.xml"
 
     //获取每个路线上的经纬度
     val polylines = getPolylineStepId(xmlPath).mkString(";")
@@ -169,42 +209,9 @@ object ParseRoute {
       val tolls = step \ "tolls"
       val toll_distance = step \ "toll_distance"
 
-      //      println(instruction.text)
-      //      println(polylineArr(0) + "_" + polylineArr.last)
-      //      println(polyline.text)
       (polylineArr(0) + "_" + polylineArr.last, instruction.text, orientation.text, road.text, distance.text, tolls.text, toll_distance.text, polyline.text)
     })
 
-    //多个经纬度组成的路线
-    //    val polylines = paths.map(path => {
-    //
-    //      //解析每个step的第一级polyline，不解析下一级，因为和第一级是重复的
-    //      val polyline = (path \\ "step" \ "polyline")
-    //
-    //      //以；切分为多个经纬度组成的路线，然后去重，因为上一个路线的最后一个经纬度会和下一个路线经纬度相同
-    //      val longitudeAndLatitudes = polyline.map(one => one.text).flatMap(_.split(";")).distinct
-    //      longitudeAndLatitudes
-    //    })
-    //打印每种路线的经纬组成的字符串
-    //由于每个路线组成的字符串长度太大，所以在IDE里打印出来显示有问题，这里只做代码示例，实际可以保存到数据库里
-    //    println("打印每种路线的经纬组成的字符串")
-    //    polylines.foreach(polyline => println(polyline.mkString(";")))
-
-    //    //polylines转为rdd，便于后面的算子操作
-    //    val polylinesRdd = spark.sparkContext.parallelize(polylines, 10)
-    //
-    //    //每个经纬出现的次数，然后降序排序，比如有三条路线，则根据出现三次的经纬数所占的比例可以看出，三种路线重叠的路段占整个路段的比例
-    //    val polylinesCountSort = polylinesRdd.flatMap(kv => kv).map((_, 1)).reduceByKey(_ + _).map(kv => (kv._2, kv._1)).sortByKey(false)
-    //
-    //    //有多少条路线
-    //    val len = paths.length
-    //
-    //    //每个路线都存在的经纬
-    //    val count = polylinesCountSort.filter(_._1 == len).count()
-    //    println("每个路线都存在的路段数所占比例")
-    //    polylines.foreach(polyline => println(count * 1.0 / polyline.length))
-    //
-    //    spark.stop()
     stepInfo
   }
   /**
@@ -225,26 +232,6 @@ object ParseRoute {
       val longitudeAndLatitudes = polyline.map(one => one.text).flatMap(_.split(";")).distinct
       longitudeAndLatitudes
     })
-    //打印每种路线的经纬组成的字符串
-    //由于每个路线组成的字符串长度太大，所以在IDE里打印出来显示有问题，这里只做代码示例，实际可以保存到数据库里
-    //    println("打印每种路线的经纬组成的字符串")
-    //    polylines.foreach(polyline => println(polyline.mkString(";")))
-
-    //    //polylines转为rdd，便于后面的算子操作
-    //    val polylinesRdd = spark.sparkContext.parallelize(polylines, 10)
-    //
-    //    //每个经纬出现的次数，然后降序排序，比如有三条路线，则根据出现三次的经纬数所占的比例可以看出，三种路线重叠的路段占整个路段的比例
-    //    val polylinesCountSort = polylinesRdd.flatMap(kv => kv).map((_, 1)).reduceByKey(_ + _).map(kv => (kv._2, kv._1)).sortByKey(false)
-    //
-    //    //有多少条路线
-    //    val len = paths.length
-    //
-    //    //每个路线都存在的经纬
-    //    val count = polylinesCountSort.filter(_._1 == len).count()
-    //    println("每个路线都存在的路段数所占比例")
-    //    polylines.foreach(polyline => println(count * 1.0 / polyline.length))
-    //
-    //    spark.stop()
     polylines
   }
 
@@ -311,16 +298,6 @@ object ParseRoute {
       //降序
       ListMap(mapDistance.toSeq.sortWith(_._2 < _._2): _*)
     }
-
-  }
-  def testArray() {
-
-    val arr1 = new Array[Int](8)
-    println(arr1)
-    println(arr1.toBuffer)
-    val arr2 = Array[Int](10)
-    println(arr2.toBuffer)
-    println(arr2.length)
 
   }
 
