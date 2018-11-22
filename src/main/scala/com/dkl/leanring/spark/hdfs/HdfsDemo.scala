@@ -12,7 +12,7 @@ import org.apache.hadoop.mapred.FileSplit
 
 object HdfsDemo {
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder().getOrCreate()
+    val spark = SparkSession.builder().master("local").getOrCreate()
     val sc = spark.sparkContext
     val path = "hdfs://ambari.master.com:8020/tmp/dkl"
 
