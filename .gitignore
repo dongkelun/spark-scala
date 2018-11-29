@@ -17,3 +17,5 @@ files/hs/
 project
 src/main/scala/com/hs/
 .cache-main
+
+lib
