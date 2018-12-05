@@ -1,5 +1,9 @@
 package com.dkl.scalbascitest
 import java.sql.{ Connection, DriverManager, ResultSet };
+
+/**
+ * Scala JDBC 连接 MySql
+ */
 object JdbcDemo {
 
   def main(args: Array[String]): Unit = {

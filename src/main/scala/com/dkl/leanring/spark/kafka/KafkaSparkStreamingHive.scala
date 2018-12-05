@@ -7,7 +7,6 @@ import org.apache.spark.streaming.kafka010.ConsumerStrategies.Subscribe
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.StreamingContext
 import org.apache.spark.streaming.Seconds
-import com.hs.xlzf.Utils.SparkUtil
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 import org.json4s._
