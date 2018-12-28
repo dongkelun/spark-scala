@@ -4,7 +4,6 @@ import org.apache.hadoop.fs.Path
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 import org.json4s.JsonAST._
-import com.dkl.leanring.spark.test.StructTypeDemo
 import org.apache.spark.ml.util.MLWritable
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.util.Identifiable
