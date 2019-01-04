@@ -54,15 +54,15 @@ object KafkaCheckPointDemo {
     val port = 9999
     val checkpointDirectory = "hdfs://ambari.master.com:8020/spark/dkl/kafka/checkpointdemo"
 
-    //    val sparkConf = new SparkConf().setAppName("RecoverableNetworkWordCount").setMaster("local[2]")
+    val sparkConf = new SparkConf().setAppName("RecoverableNetworkWordCount").setMaster("local[2]")
+    // Create the context with a 1 second batch size
+    //        val ssc = new StreamingContext(sparkConf, Seconds(1))
+    val ssc = StreamingContext.getOrCreate(checkpointDirectory,
+      () => createContext(checkpointDirectory))
+
+    //    val sparkConf = new SparkConf().setAppName("KafkaCheckPointDemo").setMaster("local[2]")
     //    // Create the context with a 1 second batch size
     //    val ssc = new StreamingContext(sparkConf, Seconds(1))
-    //    val ssc = StreamingContext.getOrCreate(checkpointDirectory,
-    //      () => createContext(checkpointDirectory))
-
-    val sparkConf = new SparkConf().setAppName("KafkaCheckPointDemo").setMaster("local[2]")
-    // Create the context with a 1 second batch size
-    val ssc = new StreamingContext(sparkConf, Seconds(1))
     //    ssc.checkpoint(checkpointDirectory)
     val server = "10.180.29.180:6667"
     val server1 = "192.168.44.129:9092"
