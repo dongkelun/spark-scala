@@ -31,7 +31,7 @@ object SparkHivePartitionOverwrite {
     val tableName="test_partition"
     //切换hive的数据库
     sql("use test")
-    //    1、创建分区表，可以将append改为overwrite，这样如果表已存在会删掉之前的表，新建表
+    //    1、创建分区表，并写入数据
     df.write.mode("overwrite").partitionBy("year").saveAsTable(tableName)
 
     spark.table(tableName).show()
