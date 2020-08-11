@@ -19,3 +19,18 @@ src/main/scala/com/hs/
 .cache-main
 
 lib
+
+.idea/*
+
+*.iml
+
+.settings/
+
+.project
+
+.classpath
+
+bin/*
+
+lib/*
+target/*
