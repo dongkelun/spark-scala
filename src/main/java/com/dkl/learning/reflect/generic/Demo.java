@@ -13,7 +13,6 @@ public class Demo {
         ArrayList<String> strList = new ArrayList<>();
         strList.add("aaa");
         strList.add("bbb");
-
         //    strList.add(100);
         //获取ArrayList的Class对象，反向的调用add()方法，添加数据
         Class listClass = strList.getClass(); //得到 strList 对象的字节码 对象
