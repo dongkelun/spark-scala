@@ -6,7 +6,7 @@ import java.util.ArrayList;
  * 通过反射越过泛型检查
  * <p>
  * 例如：有一个String泛型的集合，怎样能向这个集合中添加一个Integer类型的值？
-test2
+test
  */
 public class Demo {
 
