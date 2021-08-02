@@ -34,7 +34,7 @@ object CaseClassTest {
     case Article(_, price) => price
     case Bundle(_, disc, items @ _*) => items.map(price(_)).sum - disc
   }
-
+// test PR
   println(price(bundle))
   def main(args: Array[String]): Unit = {
 
